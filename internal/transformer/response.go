@@ -60,14 +60,11 @@ func (t *ResponseTransformer) TransformResponse(
 func (t *ResponseTransformer) transformContent(msg types.ChatMessage) ([]types.ContentBlock, error) {
 	var blocks []types.ContentBlock
 
-	// Preserve reasoning content as a thinking block so it round-trips correctly
-	// on multi-turn tool-calling conversations.
-	if msg.ReasoningContent != nil && *msg.ReasoningContent != "" {
-		blocks = append(blocks, types.ContentBlock{
-			Type:     "thinking",
-			Thinking: *msg.ReasoningContent,
-		})
-	}
+	// Do not expose OpenAI-style reasoning_content as Anthropic thinking blocks.
+	// Anthropic-compatible clients persist and replay thinking blocks, but only
+	// Anthropic can provide valid encrypted signatures for them. Unsigned
+	// reasoning_content from OpenAI-compatible providers breaks Claude Code
+	// resumes with: Invalid signature in thinking block.
 
 	// Handle tool calls — each becomes a tool_use content block.
 	for _, tc := range msg.ToolCalls {
