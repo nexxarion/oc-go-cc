@@ -121,6 +121,19 @@ func (h *StreamHandler) ProxyStream(
 		}
 	}
 
+	// Send stop events for any tool blocks not yet closed (e.g. upstream
+	// disconnected without sending a finish_reason chunk).
+	for oi, blockIdx := range startedToolCalls {
+		stopEvent := types.MessageEvent{
+			Type:  "content_block_stop",
+			Index: &blockIdx,
+		}
+		if err := writeSSEEvent(w, stopEvent); err != nil {
+			return ErrClientDisconnected
+		}
+		delete(startedToolCalls, oi)
+	}
+
 	// Send message_stop event to signal stream completion.
 	stopEvent := types.MessageEvent{
 		Type: "message_stop",
@@ -382,8 +395,14 @@ func (h *StreamHandler) processSSELine(
 		for _, tc := range choice.Delta.ToolCalls {
 			oi := tc.Index // OpenAI tool_calls array index
 
-			blockIdx, alreadyStarted := startedToolCalls[oi]
-			if !alreadyStarted {
+			blockIdx, exists := startedToolCalls[oi]
+			if !exists {
+				if tc.Function.Name == "" {
+					// Ghost chunk: this index was closed and recycled, but
+					// has no name/id. Ignore — the real tool call was
+					// already fully processed.
+					continue
+				}
 				// First time seeing this logical tool call — start a new block.
 				*contentIndex++
 				*toolUseCount++
@@ -442,24 +461,19 @@ func (h *StreamHandler) processSSELine(
 		}
 
 		// Close any open tool_use blocks. We track started tool calls by their
-		// OpenAI index; close each one in order.
+		// OpenAI index; close each one, then delete it (no -1 sentinel needed).
 		for oi, blockIdx := range startedToolCalls {
-			// Only close this block if we haven't already (toolUseCount guard)
-			if blockIdx >= 0 {
-				idx := blockIdx
-				stopEvent := types.MessageEvent{
-					Type:  "content_block_stop",
-					Index: &idx,
-				}
-				if err := writeSSEEvent(w, stopEvent); err != nil {
-					return ErrClientDisconnected
-				}
-				startedToolCalls[oi] = -1
+			idx := blockIdx
+			stopEvent := types.MessageEvent{
+				Type:  "content_block_stop",
+				Index: &idx,
 			}
+			if err := writeSSEEvent(w, stopEvent); err != nil {
+				return ErrClientDisconnected
+			}
+			delete(startedToolCalls, oi)
 		}
-		if *toolUseCount > 0 {
-			*toolUseCount = 0
-		}
+		*toolUseCount = 0
 
 		msgDelta := types.MessageEvent{
 			Type: "message_delta",
