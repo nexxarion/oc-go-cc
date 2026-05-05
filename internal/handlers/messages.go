@@ -249,7 +249,7 @@ func (h *MessagesHandler) handleStreaming(
 			select {
 			case <-ticker.C:
 				// Send SSE comment (ignored by client but keeps connection alive)
-				_, _ = fmt.Fprintf(w, ":keepalive\n\n")
+				_, _ = fmt.Fprintf(rw, ":keepalive\n\n")
 				if f, ok := w.(http.Flusher); ok {
 					f.Flush()
 				}
