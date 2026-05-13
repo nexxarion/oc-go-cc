@@ -9,12 +9,10 @@ import (
 	"oc-go-cc/pkg/types"
 )
 
-// TestTransformRequestRoundTripReasoning verifies that a DeepSeek response with
-// reasoning_content survives the full round-trip (OpenAI response → Anthropic
-// response → Anthropic request → OpenAI request) so that on the next turn
-// DeepSeed receives the reasoning_content it expects.
-func TestTransformRequestRoundTripReasoning(t *testing.T) {
-	// Step 1: Simulate a DeepSeek response with reasoning_content.
+// TestTransformRequestDoesNotRoundTripUnsignedReasoning verifies that OpenAI-compatible
+// reasoning_content is not converted into Anthropic thinking and therefore cannot poison
+// Claude Code history with unsigned thinking blocks that fail on resume.
+func TestTransformRequestDoesNotRoundTripUnsignedReasoning(t *testing.T) {
 	deepSeekReasoning := "Let me think step by step"
 	openaiResp := &types.ChatCompletionResponse{
 		ID:     "resp_123",
@@ -35,26 +33,19 @@ func TestTransformRequestRoundTripReasoning(t *testing.T) {
 		},
 	}
 
-	// Step 2: Transform to Anthropic format (what Claude Code receives).
 	rt := NewResponseTransformer()
 	anthropicResp, err := rt.TransformResponse(openaiResp, "deepseek-v4-flash")
 	if err != nil {
 		t.Fatalf("TransformResponse error: %v", err)
 	}
 
-	// Verify Anthropic response has a thinking block.
-	if len(anthropicResp.Content) != 2 {
-		t.Fatalf("expected 2 content blocks, got %d", len(anthropicResp.Content))
+	if len(anthropicResp.Content) != 1 {
+		t.Fatalf("expected 1 content block, got %d", len(anthropicResp.Content))
 	}
-	if anthropicResp.Content[0].Type != "thinking" {
-		t.Fatalf("expected first block to be thinking, got %s", anthropicResp.Content[0].Type)
-	}
-	if anthropicResp.Content[0].Thinking != deepSeekReasoning {
-		t.Fatalf("thinking text = %q, want %q", anthropicResp.Content[0].Thinking, deepSeekReasoning)
+	if anthropicResp.Content[0].Type != "text" {
+		t.Fatalf("expected first block to be text, got %s", anthropicResp.Content[0].Type)
 	}
 
-	// Step 3: Simulate Claude Code sending the conversation back on the next turn.
-	// It includes the previous assistant message with the thinking block.
 	anthropicReq := &types.MessageRequest{
 		Model:     "claude-test",
 		MaxTokens: 256,
@@ -68,40 +59,24 @@ func TestTransformRequestRoundTripReasoning(t *testing.T) {
 		},
 	}
 
-	// Step 4: Transform back to OpenAI request.
 	qt := NewRequestTransformer()
 	openaiReq, err := qt.TransformRequest(anthropicReq, config.ModelConfig{ModelID: "deepseek-v4-flash"})
 	if err != nil {
 		t.Fatalf("TransformRequest error: %v", err)
 	}
 
-	// Find the assistant message.
-	var assistantMsg *types.ChatMessage
-	for i := range openaiReq.Messages {
-		if openaiReq.Messages[i].Role == "assistant" {
-			assistantMsg = &openaiReq.Messages[i]
-			break
+	for _, msg := range openaiReq.Messages {
+		if msg.ReasoningContent != nil {
+			t.Fatalf("ReasoningContent = %q, want nil after unsigned reasoning was dropped", *msg.ReasoningContent)
 		}
 	}
-	if assistantMsg == nil {
-		t.Fatal("assistant message not found in transformed request")
-	}
 
-	// Step 5: Verify reasoning_content is preserved.
-	if assistantMsg.ReasoningContent == nil {
-		t.Fatal("ReasoningContent = nil, want non-nil after round-trip")
-	}
-	if got, want := *assistantMsg.ReasoningContent, deepSeekReasoning; got != want {
-		t.Fatalf("ReasoningContent = %q, want %q", got, want)
-	}
-
-	// Also verify the JSON serialization includes the field.
 	body, err := json.Marshal(openaiReq)
 	if err != nil {
 		t.Fatalf("json.Marshal error: %v", err)
 	}
-	if !bytes.Contains(body, []byte(`"reasoning_content"`)) {
-		t.Fatalf("serialized request missing reasoning_content field: %s", body)
+	if bytes.Contains(body, []byte(`"reasoning_content"`)) {
+		t.Fatalf("serialized request unexpectedly contains reasoning_content field: %s", body)
 	}
 }
 

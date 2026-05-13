@@ -63,7 +63,7 @@ func parseSSEEvents(t *testing.T, raw string) []types.MessageEvent {
 	return events
 }
 
-func TestProxyStream_ReasoningContentFastPath(t *testing.T) {
+func TestProxyStream_DropsReasoningContentOnlyChunks(t *testing.T) {
 	handler := NewStreamHandler()
 	w := newMockResponseWriter()
 	body := sseLines(
@@ -80,48 +80,23 @@ func TestProxyStream_ReasoningContentFastPath(t *testing.T) {
 	}
 
 	events := parseSSEEvents(t, w.buf.String())
-
-	// Expected: message_start, content_block_start, 2x content_block_delta, content_block_stop, message_delta, message_stop
-	if len(events) != 7 {
-		t.Fatalf("expected 7 events, got %d: %+v", len(events), events)
+	if len(events) != 3 {
+		t.Fatalf("expected 3 events, got %d: %+v", len(events), events)
 	}
-
-	if events[0].Type != "message_start" {
-		t.Errorf("event[0].Type = %q, want message_start", events[0].Type)
+	if events[0].Type != "message_start" || events[1].Type != "message_delta" || events[2].Type != "message_stop" {
+		t.Fatalf("unexpected event sequence: %+v", events)
 	}
-	if events[1].Type != "content_block_start" {
-		t.Errorf("event[1].Type = %q, want content_block_start", events[1].Type)
-	}
-	if events[1].ContentBlock == nil || events[1].ContentBlock.Type != "thinking" {
-		t.Errorf("event[1].ContentBlock = %+v, want thinking block", events[1].ContentBlock)
-	}
-	if events[2].Type != "content_block_delta" {
-		t.Errorf("event[2].Type = %q, want content_block_delta", events[2].Type)
-	}
-	if got := events[2].Delta.Type; got != "thinking_delta" {
-		t.Errorf("event[2].Delta.Type = %q, want thinking_delta", got)
-	}
-	if got := events[2].Delta.Thinking; got != "Let me think" {
-		t.Errorf("event[2].Delta.Thinking = %q, want %q", got, "Let me think")
-	}
-	if events[3].Type != "content_block_delta" {
-		t.Errorf("event[3].Type = %q, want content_block_delta", events[3].Type)
-	}
-	if got := events[3].Delta.Thinking; got != " step by step" {
-		t.Errorf("event[3].Delta.Thinking = %q, want %q", got, " step by step")
-	}
-	if events[4].Type != "content_block_stop" {
-		t.Errorf("event[4].Type = %q, want content_block_stop", events[4].Type)
-	}
-	if events[5].Type != "message_delta" {
-		t.Errorf("event[5].Type = %q, want message_delta", events[5].Type)
-	}
-	if events[6].Type != "message_stop" {
-		t.Errorf("event[6].Type = %q, want message_stop", events[6].Type)
+	for _, ev := range events {
+		if ev.ContentBlock != nil && ev.ContentBlock.Type == "thinking" {
+			t.Fatalf("unexpected thinking block emitted: %+v", ev)
+		}
+		if ev.Delta != nil && ev.Delta.Type == "thinking_delta" {
+			t.Fatalf("unexpected thinking delta emitted: %+v", ev)
+		}
 	}
 }
 
-func TestProxyStream_ReasoningThenText(t *testing.T) {
+func TestProxyStream_DropsReasoningThenKeepsText(t *testing.T) {
 	handler := NewStreamHandler()
 	w := newMockResponseWriter()
 	body := sseLines(
@@ -139,39 +114,28 @@ func TestProxyStream_ReasoningThenText(t *testing.T) {
 	}
 
 	events := parseSSEEvents(t, w.buf.String())
-
-	// Expected: message_start, content_block_start(thinking, idx=0), thinking_delta, content_block_stop(idx=0),
-	//           content_block_start(text, idx=1), text_delta x2, content_block_stop(idx=1), message_delta, message_stop
-	if len(events) != 10 {
-		t.Fatalf("expected 10 events, got %d: %+v", len(events), events)
+	if len(events) != 7 {
+		t.Fatalf("expected 7 events, got %d: %+v", len(events), events)
 	}
-
-	// Verify indexes
 	if got := *events[1].Index; got != 0 {
-		t.Errorf("thinking start index = %d, want 0", got)
+		t.Errorf("text start index = %d, want 0", got)
 	}
-	if got := *events[3].Index; got != 0 {
-		t.Errorf("thinking stop index = %d, want 0", got)
+	if got := *events[4].Index; got != 0 {
+		t.Errorf("text stop index = %d, want 0", got)
 	}
-	if got := *events[4].Index; got != 1 {
-		t.Errorf("text start index = %d, want 1", got)
+	if events[1].ContentBlock == nil || events[1].ContentBlock.Type != "text" {
+		t.Errorf("event[1].ContentBlock = %+v, want text block", events[1].ContentBlock)
 	}
-	if got := *events[7].Index; got != 1 {
-		t.Errorf("text stop index = %d, want 1", got)
+	if got := events[2].Delta.Text; got != "Hello" {
+		t.Errorf("event[2].Delta.Text = %q, want Hello", got)
 	}
-
-	// Verify types
-	if events[1].ContentBlock == nil || events[1].ContentBlock.Type != "thinking" {
-		t.Errorf("event[1].ContentBlock = %+v, want thinking block", events[1].ContentBlock)
+	if got := events[3].Delta.Text; got != " world" {
+		t.Errorf("event[3].Delta.Text = %q, want space-world", got)
 	}
-	if got := events[2].Delta.Type; got != "thinking_delta" {
-		t.Errorf("event[2].Delta.Type = %q, want thinking_delta", got)
-	}
-	if events[4].ContentBlock == nil || events[4].ContentBlock.Type != "text" {
-		t.Errorf("event[4].ContentBlock = %+v, want text block", events[4].ContentBlock)
-	}
-	if got := events[5].Delta.Type; got != "text_delta" {
-		t.Errorf("event[5].Delta.Type = %q, want text_delta", got)
+	for _, ev := range events {
+		if ev.ContentBlock != nil && ev.ContentBlock.Type == "thinking" {
+			t.Fatalf("unexpected thinking block emitted: %+v", ev)
+		}
 	}
 }
 
@@ -298,11 +262,9 @@ func TestProxyStream_NoDuplicateMessageDelta(t *testing.T) {
 	}
 }
 
-func TestProxyStream_ReasoningJSONFallback(t *testing.T) {
+func TestProxyStream_DropsReasoningJSONFallback(t *testing.T) {
 	handler := NewStreamHandler()
 	w := newMockResponseWriter()
-	// This payload does NOT match the fast-path string pattern because of extra whitespace,
-	// forcing the JSON fallback path.
 	body := sseLines(
 		fmt.Sprintf(`{"choices":[{"delta":%s}]}`, mustJSON(t, types.ChatMessage{ReasoningContent: strPtr("Reasoning via JSON")})),
 		`{"choices":[{"delta":{},"finish_reason":"stop"}]}`,
@@ -316,20 +278,13 @@ func TestProxyStream_ReasoningJSONFallback(t *testing.T) {
 	}
 
 	events := parseSSEEvents(t, w.buf.String())
-
-	// Expected: message_start, content_block_start, content_block_delta, content_block_stop, message_delta, message_stop
-	if len(events) != 6 {
-		t.Fatalf("expected 6 events, got %d: %+v", len(events), events)
+	if len(events) != 3 {
+		t.Fatalf("expected 3 events, got %d: %+v", len(events), events)
 	}
-
-	if events[1].Type != "content_block_start" || events[1].ContentBlock == nil || events[1].ContentBlock.Type != "thinking" {
-		t.Errorf("event[1] = %+v, want content_block_start(thinking)", events[1])
-	}
-	if events[2].Type != "content_block_delta" || events[2].Delta.Type != "thinking_delta" {
-		t.Errorf("event[2] = %+v, want content_block_delta(thinking_delta)", events[2])
-	}
-	if events[2].Delta.Thinking != "Reasoning via JSON" {
-		t.Errorf("event[2].Delta.Thinking = %q, want %q", events[2].Delta.Thinking, "Reasoning via JSON")
+	for _, ev := range events {
+		if ev.ContentBlock != nil && ev.ContentBlock.Type == "thinking" {
+			t.Fatalf("unexpected thinking block emitted: %+v", ev)
+		}
 	}
 }
 
@@ -364,7 +319,7 @@ func TestProxyStream_EmptyReasoningContentSkipped(t *testing.T) {
 	}
 }
 
-func TestProxyStream_ReasoningAndContentInSameChunk(t *testing.T) {
+func TestProxyStream_DropsReasoningAndKeepsContentInSameChunk(t *testing.T) {
 	handler := NewStreamHandler()
 	w := newMockResponseWriter()
 	body := sseLines(
@@ -384,60 +339,35 @@ func TestProxyStream_ReasoningAndContentInSameChunk(t *testing.T) {
 	}
 
 	events := parseSSEEvents(t, w.buf.String())
-
-	// message_start + thinking_start + thinking_delta + thinking_stop +
-	// text_start + text_delta("Hello") + text_delta(" world") + text_stop +
-	// message_delta + message_stop = 10
-	if len(events) != 10 {
-		t.Fatalf("expected 10 events, got %d: %+v", len(events), events)
+	if len(events) != 7 {
+		t.Fatalf("expected 7 events, got %d: %+v", len(events), events)
 	}
-
-	// Block 0: thinking
-	if events[1].Type != "content_block_start" || events[1].ContentBlock == nil || events[1].ContentBlock.Type != "thinking" {
-		t.Errorf("event[1] = %+v, want content_block_start(thinking)", events[1])
+	if events[1].Type != "content_block_start" || events[1].ContentBlock == nil || events[1].ContentBlock.Type != "text" {
+		t.Errorf("event[1] = %+v, want content_block_start(text)", events[1])
 	}
-	if events[2].Type != "content_block_delta" || events[2].Delta.Type != "thinking_delta" {
-		t.Errorf("event[2] = %+v, want content_block_delta(thinking_delta)", events[2])
+	if got := *events[1].Index; got != 0 {
+		t.Errorf("text start index = %d, want 0", got)
 	}
-	if events[2].Delta.Thinking != "Thinking..." {
-		t.Errorf("event[2].Delta.Thinking = %q, want %q", events[2].Delta.Thinking, "Thinking...")
+	if events[2].Delta.Text != "Hello" {
+		t.Errorf("event[2].Delta.Text = %q, want Hello", events[2].Delta.Text)
 	}
-	if events[3].Type != "content_block_stop" {
-		t.Errorf("event[3].Type = %q, want content_block_stop", events[3].Type)
+	if events[3].Delta.Text != " world" {
+		t.Errorf("event[3].Delta.Text = %q, want space-world", events[3].Delta.Text)
 	}
-
-	// Block 1: text
-	if events[4].Type != "content_block_start" || events[4].ContentBlock == nil || events[4].ContentBlock.Type != "text" {
-		t.Errorf("event[4] = %+v, want content_block_start(text)", events[4])
-	}
-	if events[5].Type != "content_block_delta" || events[5].Delta.Type != "text_delta" {
-		t.Errorf("event[5] = %+v, want content_block_delta(text_delta)", events[5])
-	}
-	if events[5].Delta.Text != "Hello" {
-		t.Errorf("event[5].Delta.Text = %q, want Hello", events[5].Delta.Text)
-	}
-	if events[6].Type != "content_block_delta" || events[6].Delta.Type != "text_delta" {
-		t.Errorf("event[6] = %+v, want content_block_delta(text_delta)", events[6])
-	}
-	if events[6].Delta.Text != " world" {
-		t.Errorf("event[6].Delta.Text = %q, want \" world\"", events[6].Delta.Text)
-	}
-	if events[7].Type != "content_block_stop" {
-		t.Errorf("event[7].Type = %q, want content_block_stop", events[7].Type)
+	for _, ev := range events {
+		if ev.ContentBlock != nil && ev.ContentBlock.Type == "thinking" {
+			t.Fatalf("unexpected thinking block emitted: %+v", ev)
+		}
 	}
 }
 
-// TestProxyStream_ReasoningBeforeContentFastPathRegression ensures that when
-// a provider sends reasoning_content BEFORE content in the same delta (with no
-// role field), the fast path for content is skipped and reasoning_content is
-// not silently dropped. If it were dropped, the next turn would fail on
-// DeepSeek with "reasoning_content must be passed back".
-func TestProxyStream_ReasoningBeforeContentFastPathRegression(t *testing.T) {
+// TestProxyStream_DropsReasoningBeforeContentFastPathRegression ensures that
+// reasoning_content before content does not hide the content. The unsigned
+// reasoning itself must be dropped to avoid poisoning Claude Code resumes with
+// invalid Anthropic thinking signatures.
+func TestProxyStream_DropsReasoningBeforeContentFastPathRegression(t *testing.T) {
 	handler := NewStreamHandler()
 	w := newMockResponseWriter()
-	// Hand-crafted JSON: reasoning_content appears before content, no role field.
-	// Before the fix, the fast path matched "delta":{"content":" and returned
-	// early, discarding reasoning_content entirely.
 	body := sseLines(
 		`{"choices":[{"delta":{"reasoning_content":"Thinking...","content":"Hello"}}]}`,
 		`{"choices":[{"delta":{"content":" world"}}]}`,
@@ -452,31 +382,63 @@ func TestProxyStream_ReasoningBeforeContentFastPathRegression(t *testing.T) {
 	}
 
 	events := parseSSEEvents(t, w.buf.String())
+	if len(events) != 7 {
+		t.Fatalf("expected 7 events, got %d: %+v", len(events), events)
+	}
+	if events[1].Type != "content_block_start" || events[1].ContentBlock == nil || events[1].ContentBlock.Type != "text" {
+		t.Errorf("event[1] = %+v, want content_block_start(text)", events[1])
+	}
+	if events[2].Delta.Text != "Hello" {
+		t.Errorf("event[2].Delta.Text = %q, want Hello", events[2].Delta.Text)
+	}
+	if events[3].Delta.Text != " world" {
+		t.Errorf("event[3].Delta.Text = %q, want space-world", events[3].Delta.Text)
+	}
+	for _, ev := range events {
+		if ev.ContentBlock != nil && ev.ContentBlock.Type == "thinking" {
+			t.Fatalf("unexpected thinking block emitted: %+v", ev)
+		}
+	}
+}
 
-	// message_start + thinking_start + thinking_delta + thinking_stop +
-	// text_start + text_delta("Hello") + text_delta(" world") + text_stop +
-	// message_delta + message_stop = 10
-	if len(events) != 10 {
-		t.Fatalf("expected 10 events, got %d: %+v", len(events), events)
+func TestProxyStream_ToolOnlyResponseStartsAtIndexZero(t *testing.T) {
+	handler := NewStreamHandler()
+	w := newMockResponseWriter()
+	body := sseLines(
+		`{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_123","type":"function","function":{"name":"Bash","arguments":"{\"command\""}}]}}]}`,
+		`{"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":":\"pwd\"}"}}]}}]}`,
+		`{"choices":[{"delta":{},"finish_reason":"tool_calls"}]}`,
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	if err := handler.ProxyStream(w, body, "qwen3.6-plus", ctx); err != nil {
+		t.Fatalf("ProxyStream error: %v", err)
 	}
 
-	// Block 0: thinking (must NOT be lost)
-	if events[1].Type != "content_block_start" || events[1].ContentBlock == nil || events[1].ContentBlock.Type != "thinking" {
-		t.Errorf("event[1] = %+v, want content_block_start(thinking)", events[1])
+	events := parseSSEEvents(t, w.buf.String())
+	if len(events) < 5 {
+		t.Fatalf("expected at least 5 events, got %d: %+v", len(events), events)
 	}
-	if events[2].Type != "content_block_delta" || events[2].Delta.Type != "thinking_delta" {
-		t.Errorf("event[2] = %+v, want content_block_delta(thinking_delta)", events[2])
+	start := events[1]
+	if start.Type != "content_block_start" || start.ContentBlock == nil || start.ContentBlock.Type != "tool_use" {
+		t.Fatalf("event[1] = %+v, want content_block_start(tool_use)", start)
 	}
-	if events[2].Delta.Thinking != "Thinking..." {
-		t.Errorf("event[2].Delta.Thinking = %q, want %q", events[2].Delta.Thinking, "Thinking...")
+	if start.Index == nil || *start.Index != 0 {
+		t.Fatalf("tool_use start index = %v, want 0", start.Index)
 	}
-
-	// Block 1: text
-	if events[4].Type != "content_block_start" || events[4].ContentBlock == nil || events[4].ContentBlock.Type != "text" {
-		t.Errorf("event[4] = %+v, want content_block_start(text)", events[4])
+	if got, want := start.ContentBlock.ID, "call_123"; got != want {
+		t.Fatalf("tool id = %q, want %q", got, want)
 	}
-	if events[5].Delta.Text != "Hello" {
-		t.Errorf("event[5].Delta.Text = %q, want Hello", events[5].Delta.Text)
+	if got, want := start.ContentBlock.Name, "Bash"; got != want {
+		t.Fatalf("tool name = %q, want %q", got, want)
+	}
+	if events[2].Index == nil || *events[2].Index != 0 {
+		t.Fatalf("first tool delta index = %v, want 0", events[2].Index)
+	}
+	if events[3].Index == nil || *events[3].Index != 0 {
+		t.Fatalf("second tool delta index = %v, want 0", events[3].Index)
 	}
 }
 

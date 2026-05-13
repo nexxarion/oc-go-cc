@@ -6,7 +6,7 @@ import (
 	"oc-go-cc/pkg/types"
 )
 
-func TestTransformResponsePreservesReasoningContent(t *testing.T) {
+func TestTransformResponseDropsUnsignedReasoningContent(t *testing.T) {
 	transformer := NewResponseTransformer()
 
 	reasoning := "Let me think about this step by step"
@@ -38,26 +38,18 @@ func TestTransformResponsePreservesReasoningContent(t *testing.T) {
 		t.Fatalf("TransformResponse() error = %v", err)
 	}
 
-	if got, want := len(anthropicResp.Content), 2; got != want {
+	if got, want := len(anthropicResp.Content), 1; got != want {
 		t.Fatalf("len(Content) = %d, want %d", got, want)
 	}
-
-	if got, want := anthropicResp.Content[0].Type, "thinking"; got != want {
+	if got, want := anthropicResp.Content[0].Type, "text"; got != want {
 		t.Fatalf("Content[0].Type = %q, want %q", got, want)
 	}
-	if got, want := anthropicResp.Content[0].Thinking, reasoning; got != want {
-		t.Fatalf("Content[0].Thinking = %q, want %q", got, want)
-	}
-
-	if got, want := anthropicResp.Content[1].Type, "text"; got != want {
-		t.Fatalf("Content[1].Type = %q, want %q", got, want)
-	}
-	if got, want := anthropicResp.Content[1].Text, "The answer is 42."; got != want {
-		t.Fatalf("Content[1].Text = %q, want %q", got, want)
+	if got, want := anthropicResp.Content[0].Text, "The answer is 42."; got != want {
+		t.Fatalf("Content[0].Text = %q, want %q", got, want)
 	}
 }
 
-func TestTransformResponsePreservesReasoningContentWithToolCalls(t *testing.T) {
+func TestTransformResponseDropsUnsignedReasoningContentWithToolCalls(t *testing.T) {
 	transformer := NewResponseTransformer()
 
 	reasoning := "I need to call a tool to get the weather"
@@ -99,24 +91,15 @@ func TestTransformResponsePreservesReasoningContentWithToolCalls(t *testing.T) {
 		t.Fatalf("TransformResponse() error = %v", err)
 	}
 
-	if got, want := len(anthropicResp.Content), 2; got != want {
+	if got, want := len(anthropicResp.Content), 1; got != want {
 		t.Fatalf("len(Content) = %d, want %d", got, want)
 	}
-
-	if got, want := anthropicResp.Content[0].Type, "thinking"; got != want {
+	if got, want := anthropicResp.Content[0].Type, "tool_use"; got != want {
 		t.Fatalf("Content[0].Type = %q, want %q", got, want)
 	}
-	if got, want := anthropicResp.Content[0].Thinking, reasoning; got != want {
-		t.Fatalf("Content[0].Thinking = %q, want %q", got, want)
+	if got, want := anthropicResp.Content[0].Name, "get_weather"; got != want {
+		t.Fatalf("Content[0].Name = %q, want %q", got, want)
 	}
-
-	if got, want := anthropicResp.Content[1].Type, "tool_use"; got != want {
-		t.Fatalf("Content[1].Type = %q, want %q", got, want)
-	}
-	if got, want := anthropicResp.Content[1].Name, "get_weather"; got != want {
-		t.Fatalf("Content[1].Name = %q, want %q", got, want)
-	}
-
 	if got, want := anthropicResp.StopReason, "tool_use"; got != want {
 		t.Fatalf("StopReason = %q, want %q", got, want)
 	}
@@ -157,7 +140,6 @@ func TestTransformResponseOmitsEmptyReasoningContent(t *testing.T) {
 	if got, want := len(anthropicResp.Content), 1; got != want {
 		t.Fatalf("len(Content) = %d, want %d", got, want)
 	}
-
 	if got, want := anthropicResp.Content[0].Type, "text"; got != want {
 		t.Fatalf("Content[0].Type = %q, want %q", got, want)
 	}
@@ -196,7 +178,6 @@ func TestTransformResponseNoReasoningContent(t *testing.T) {
 	if got, want := len(anthropicResp.Content), 1; got != want {
 		t.Fatalf("len(Content) = %d, want %d", got, want)
 	}
-
 	if got, want := anthropicResp.Content[0].Type, "text"; got != want {
 		t.Fatalf("Content[0].Type = %q, want %q", got, want)
 	}
